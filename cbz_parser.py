@@ -25,6 +25,7 @@ class CBZFile:
     """
     
     raw_filename: str
+    fallback: bool = True
     title: Optional[str] = None
     chapter: Optional[str] = None
     volume: Optional[str] = None
@@ -37,19 +38,22 @@ class CBZFile:
     is_compilation: bool = False
     extra_tags: list[str] = field(default_factory=list)
     
-    def __post_init__(self):
+    def __post_init__(self, fallback = True):
         """Parse the filename after initialization."""
+        self.fallback=fallback
         self._parse_filename()
     
     def _parse_filename(self):
+    
         """Parse the raw filename to extract metadata."""
         # Get the full path to extract folder context
         full_path = Path(self.raw_filename)
         
         # Get just the filename without path and extension
+        cb_extensions = ('.cbz', '.cbr', '.cb7') 
         filename = full_path.name
-        if filename.endswith('.cbz'):
-            filename = filename[:-4]
+        if full_path.suffix.casefold() in cb_extensions:
+            filename = full_path.stem
         
         # Get parent folder name for context (useful for bare filenames)
         parent_folder = full_path.parent.name if full_path.parent.name != '.' else None
@@ -231,7 +235,10 @@ class CBZFile:
             if title_candidate:
                 self.title = title_candidate.strip()
             else:
-                self.title = filename  # Fallback to full filename
+                if self.fallback:
+                    self.title = filename  # Fallback to full filename
+                else:
+                    self.title = None
     
     @property
     def chapter_number(self) -> Optional[float]:
@@ -299,7 +306,7 @@ class CBZFile:
         return ", ".join(parts) + ")"
 
 
-def parse_cbz_filename(filename: str) -> CBZFile:
+def parse_cbz_filename(filename: str, fallback = True) -> CBZFile:
     """
     Convenience function to parse a CBZ filename.
     
@@ -318,7 +325,7 @@ def parse_cbz_filename(filename: str) -> CBZFile:
         >>> print(cbz.year)
         2024
     """
-    return CBZFile(raw_filename=filename)
+    return CBZFile(raw_filename=filename, fallback=fallback)
 
 
 if __name__ == "__main__":
