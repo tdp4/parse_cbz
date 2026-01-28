@@ -29,6 +29,8 @@ class CBZFile:
     title: Optional[str] = None
     chapter: Optional[str] = None
     volume: Optional[str] = None
+    special: Optional[str] = None
+    annual: Optional[str] = None
     year: Optional[int] = None
     uploader: Optional[str] = None
     source: Optional[str] = None
@@ -70,8 +72,89 @@ class CBZFile:
         if re.search(r'\b[Cc]omplete\b|\b[Cc]ollection\b|\b[Cc]ompilation\b', filename):
             self.is_compilation = True
         
+        # Predefine title to "Unknown", think of the bytes saved.
+        self.title = "Unknown"
+
         # Try different parsing patterns in order of specificity
-        
+
+        # Mihon Hashes?
+        has_hash = r'(.+_)[0-9a-z_]{6}$'
+        match = re.search(has_hash, filename)
+        if match:
+            # Looks like we have a Mihon special case.
+            # Exmaples here are formatted as:
+            #     {series}/{garbage1_}Chapter *{chapter.sub}{_garbage2}_{99hash}.cbz
+            #   Hash is always 0-9a-z and 6 chars long
+            #   Chapter could also be Episode or Volume
+            #   Garbage1 and Garbage2 are optional but only seem to be exclusive, not both
+            #   In all cases, pull the Chapter first, Volume second, and Series from the parent_folder.
+            #
+
+            prehashname = match.group(1)
+
+            # Preprocess parent_folder, makes sense here.
+            if parent_folder:
+                # Clean up parent folder name
+                cleaned_title = re.sub(r'\s+\(\d{4}[-\d]*\).*$', '', parent_folder)
+                cleaned_title = re.sub(r'\s+\([Dd]igital\).*$', '', cleaned_title)
+                cleaned_title = re.sub(r'\s+\([^)]+\)$', '', cleaned_title)
+                self.title = cleaned_title.strip()
+
+            # Mihon1: Uses "Chapter 152.1_", "Episode 152.1_", "Ch.152.1_", or "#152.1_"
+            #         Uses "Chapter 152_", "Episode 152_", "Ch.152_", or "#152_"
+            mihon1 = {
+                r'^.*\b[Cc]hapter ?(\d+(?:\.\d+)?)_*.*$',
+                r'^.*\b[Ee]pisode ?(\d+(?:\.\d+)?)_*.*$',
+                r'^.*\b[Cc]h\.?(\d+(?:\.\d+)?)_*.*$',
+                r'^.*#(\d+(?:\.\d+)?)_*.*$'
+                r'^.*\b[Cc]hapter ?(\d+)_.*$',
+                r'^.*\b[Ee]pisode ?(\d+)_.*$',
+                r'^.*\b[Cc]h\.? ?(\d+)_?.*$',
+                r'^.*\b[Ee]p\.? ?(\d+)_.*$',
+                r'^.*#(\d+)_*.*'
+            }
+            for pattern in mihon1:
+                match = re.match(pattern, prehashname)
+                if match: 
+                    self.chapter = match.group(1)
+                    return
+
+            # Mihon2: Uses "Volume 11_", "Vol.11"
+            mihon2 = {
+                r'^.*\v[Vv]olume ?(\d+)_.*$',
+                r'^.*\v[Vv]ol\.? ?(\d+)_.*$'
+            }
+            for pattern in mihon2:
+                match = re.match(pattern, prehashname)
+                if match: 
+                    self.volume = match.group(1)
+                    return
+
+            # Mihon3: Uses "Annual 2024_"
+            mihon3 = r'^.*\b[Aa]nnual ?(\d{4})_.*$'
+            match = re.match(mihon3, prehashname)
+            if match: 
+                self.annual = match.group(1)
+                self.year = int(match.group(1))
+                return
+
+            # Mihon4: Uses "Special 2_"
+            mihon4 = r'^.*\b[Ss]pecial ?(\d+)_.*$'
+            match = re.match(mihon4, prehashname)
+            if match: 
+                self.special = match.group(1)
+                return
+
+            # These rules must run last...
+            # Mihon90: Uses "Full" (One-Shot Omnibus class)
+            mihon90 = r'^.*\b[Ff]ull_.*$'
+            match = re.match(mihon90, prehashname)
+            if match: 
+                self.volume = "1"
+                self.is_oneshot = True
+                self.is_compilation = True
+                return
+
         # Pattern 1: "Title - c### (v##) [Source] [Group].cbz"
         # Example: Ah... and Mm... Are All She Says - c002 (v01) [Mangadex] [Gouma-Den]
         pattern1 = r'^(.+?)\s+-\s+c(\d+(?:\.\d+)?)\s+\(v(\d+)\)\s+\[([^\]]+)\]\s+\[([^\]]+)\]'
@@ -166,8 +249,6 @@ class CBZFile:
                 cleaned_title = re.sub(r'\s+\(\d{4}[-\d]*\).*$', '', parent_folder)
                 cleaned_title = re.sub(r'\s+\([Dd]igital\).*$', '', cleaned_title)
                 self.title = cleaned_title.strip()
-            else:
-                self.title = "Unknown"
             return
         
         # Pattern 9: Bare chapter format like "c152b"
@@ -183,8 +264,6 @@ class CBZFile:
                 cleaned_title = re.sub(r'\s+\([Dd]igital\).*$', '', cleaned_title)
                 cleaned_title = re.sub(r'\s+\([^)]+\)$', '', cleaned_title)
                 self.title = cleaned_title.strip()
-            else:
-                self.title = "Unknown"
             return
         
         # Pattern 10: Complex patterns with multiple parentheses and brackets
