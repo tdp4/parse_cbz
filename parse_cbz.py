@@ -15,9 +15,12 @@ Examples:
 
 import sys
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from cbz_parser import parse_cbz_filename
 
+logger = logging.getLogger('process')
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ['-h', '--help']:
@@ -26,6 +29,12 @@ def main():
     
     filename = sys.argv[1]
     pretty = '--pretty' in sys.argv or '-p' in sys.argv
+    debug = '--debug' in sys.argv or '-d' in sys.argv
+
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
+    
+
     
     # Parse the filename
     cbz = parse_cbz_filename(filename)
@@ -38,6 +47,8 @@ def main():
         'chapter_number': cbz.chapter_number,
         'volume': cbz.volume,
         'volume_number': cbz.volume_number,
+        'annual': cbz.annual,
+        'special': cbz.special,
         'year': cbz.year,
         'uploader': cbz.uploader,
         'source': cbz.source,

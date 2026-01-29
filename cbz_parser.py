@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 from typing import Optional
 
+import logging
+logger = logging.getLogger('cbz_parser')
 
 @dataclass
 class CBZFile:
@@ -47,6 +49,7 @@ class CBZFile:
     
     def _parse_filename(self):
     
+        logging.debug(f'Parsing filename: [{self.raw_filename}]')
         """Parse the raw filename to extract metadata."""
         # Get the full path to extract folder context
         full_path = Path(self.raw_filename)
@@ -56,20 +59,24 @@ class CBZFile:
         filename = full_path.name
         if full_path.suffix.casefold() in cb_extensions:
             filename = full_path.stem
+            logging.debug(f'Stripping valid extension off, filename: [{filename}]')
         
         # Get parent folder name for context (useful for bare filenames)
         parent_folder = full_path.parent.name if full_path.parent.name != '.' else None
         
         # Check for "One-shot" pattern
         if re.search(r'\b[Oo]ne-shot\b', filename):
+            logging.debug(f' - Found One-Shot pattern')
             self.is_oneshot = True
         
         # Check for digital
         if re.search(r'\([Dd]igital\)', filename):
+            logging.debug(f' - Found Digital pattern')
             self.is_digital = True
         
         # Check for compilation indicators
         if re.search(r'\b[Cc]omplete\b|\b[Cc]ollection\b|\b[Cc]ompilation\b', filename):
+            logging.debug(f' - Found Compilation pattern')
             self.is_compilation = True
         
         # Predefine title to "Unknown", think of the bytes saved.
@@ -77,10 +84,14 @@ class CBZFile:
 
         # Try different parsing patterns in order of specificity
 
+        is_mihon = re.search(r'/(mihon).*?/', f"{full_path}", re.IGNORECASE)
+        if is_mihon:
+            logging.debug(f' - Found Mihon in parent folder path.')
+
         # Mihon Hashes?
         has_hash = r'(.+_)[0-9a-z_]{6}$'
         match = re.search(has_hash, filename)
-        if match:
+        if match or is_mihon:
             # Looks like we have a Mihon special case.
             # Exmaples here are formatted as:
             #     {series}/{garbage1_}Chapter *{chapter.sub}{_garbage2}_{99hash}.cbz
@@ -89,9 +100,14 @@ class CBZFile:
             #   Garbage1 and Garbage2 are optional but only seem to be exclusive, not both
             #   In all cases, pull the Chapter first, Volume second, and Series from the parent_folder.
             #
-
-            prehashname = match.group(1)
-
+            
+            if match:
+                prehashname = match.group(1)
+                logging.debug(f' - Mihon processing filename: [{prehashname}] (hash)')
+            else:
+                prehashname = filename
+                logging.debug(f' - Mihon processing filename: [{prehashname}] (nothash)')
+            
             # Preprocess parent_folder, makes sense here.
             if parent_folder:
                 # Clean up parent folder name
@@ -103,57 +119,73 @@ class CBZFile:
             # Mihon1: Uses "Chapter 152.1_", "Episode 152.1_", "Ch.152.1_", or "#152.1_"
             #         Uses "Chapter 152_", "Episode 152_", "Ch.152_", or "#152_"
             mihon1 = {
-                r'^.*\b[Cc]hapter ?(\d+(?:\.\d+)?)_*.*$',
-                r'^.*\b[Ee]pisode ?(\d+(?:\.\d+)?)_*.*$',
-                r'^.*\b[Cc]h\.?(\d+(?:\.\d+)?)_*.*$',
-                r'^.*#(\d+(?:\.\d+)?)_*.*$'
-                r'^.*\b[Cc]hapter ?(\d+)_.*$',
-                r'^.*\b[Ee]pisode ?(\d+)_.*$',
-                r'^.*\b[Cc]h\.? ?(\d+)_?.*$',
-                r'^.*\b[Ee]p\.? ?(\d+)_.*$',
+                r'^.*\b[Cc]hapter ?(\d+(?:\.\d+)?)_?\b',
+                r'^.*\b[Ee]pisode ?(\d+(?:\.\d+)?)_?\b',
+                r'^.*\b[Cc]h\.?(\d+(?:\.\d+)?)_?\b',
+                r'^.*#(\d+(?:\.\d+)?)_?\b',
+                r'^.*\b[Cc]hapter ?(\d+)_?\b',
+                r'^.*\b[Ee]pisode ?(\d+)_?\b',
+                r'^.*\b[Cc]h\.? ?(\d+)_?\b',
+                r'^.*\b[Ee]p\.? ?(\d+)_?\b',
                 r'^.*#(\d+)_*.*'
             }
             for pattern in mihon1:
                 match = re.match(pattern, prehashname)
                 if match: 
                     self.chapter = match.group(1)
+                    logging.debug(f' - (mihon1) Found Chapter: [{self.chapter}]')
                     return
 
             # Mihon2: Uses "Volume 11_", "Vol.11"
             mihon2 = {
-                r'^.*\v[Vv]olume ?(\d+)_.*$',
-                r'^.*\v[Vv]ol\.? ?(\d+)_.*$'
+                r'^.*\b[Vv]olume ?(\d+)_?',
+                r'^.*\b[Vv]ol\.? ?(\d+)_?'
             }
             for pattern in mihon2:
                 match = re.match(pattern, prehashname)
                 if match: 
                     self.volume = match.group(1)
+                    logging.debug(f' - (mihon2) Found Volume: [{self.volume}]')
                     return
 
             # Mihon3: Uses "Annual 2024_"
-            mihon3 = r'^.*\b[Aa]nnual ?(\d{4})_.*$'
+            mihon3 = r'^.*\b[Aa]nnual ?(\d{4})\b'
             match = re.match(mihon3, prehashname)
             if match: 
                 self.annual = match.group(1)
                 self.year = int(match.group(1))
+                logging.debug(f' - (mihon3) Found Annual: [{self.annual}]')
                 return
 
             # Mihon4: Uses "Special 2_"
-            mihon4 = r'^.*\b[Ss]pecial ?(\d+)_.*$'
+            mihon4 = r'^.*\b[Ss]pecial ?(\d+)\b'
             match = re.match(mihon4, prehashname)
             if match: 
                 self.special = match.group(1)
+                logging.debug(f' - (mihon4) Found Special: [{self.special}]')
+                return
+
+            # Mihon5: Uses "Preview"
+            mihon5 = r'^.*\b([Pp]review)s?\b'
+            match = re.match(mihon5, prehashname)
+            if match: 
+                self.special = match.group(1)
+                logging.debug(f' - (mihon5) Found Preview: [{self.special}]')
                 return
 
             # These rules must run last...
             # Mihon90: Uses "Full" (One-Shot Omnibus class)
-            mihon90 = r'^.*\b[Ff]ull_.*$'
+            mihon90 = r'^.*\b[Ff]ull\b'
             match = re.match(mihon90, prehashname)
             if match: 
                 self.volume = "1"
                 self.is_oneshot = True
                 self.is_compilation = True
+                logging.debug(f' - (mihon90) Found Full')
                 return
+
+            logging.debug(f' - Mihon Processing failed, falling back to default.')
+
 
         # Pattern 1: "Title - c### (v##) [Source] [Group].cbz"
         # Example: Ah... and Mm... Are All She Says - c002 (v01) [Mangadex] [Gouma-Den]
@@ -165,6 +197,7 @@ class CBZFile:
             self.volume = match.group(3)
             self.source = match.group(4)
             self.group = match.group(5)
+            logging.debug(f' - (pattern1) Found Chapter [{self.chapter}] and Volume [{self.volume}]')
             return
         
         # Pattern 2: "Title c### - Subtitle (YEAR) (Digital) (Uploader)"
@@ -176,6 +209,7 @@ class CBZFile:
             self.chapter = match.group(2)
             self.year = int(match.group(3))
             self.uploader = match.group(4)
+            logging.debug(f' - (pattern2) Found Chapter: [{self.chapter}]')
             return
         
         # Pattern 3: "Title c### (YEAR) (Digital) (Uploader)"
@@ -187,6 +221,7 @@ class CBZFile:
             self.chapter = match.group(2)
             self.year = int(match.group(3))
             self.uploader = match.group(4)
+            logging.debug(f' - (pattern3) Found Chapter: [{self.chapter}]')
             return
         
         # Pattern 4: "Title CHAPTER# (YEAR) (Digital) (Uploader)" (no 'c' prefix)
@@ -204,6 +239,7 @@ class CBZFile:
                 self.chapter = potential_chapter
                 self.year = int(match.group(3))
                 self.uploader = match.group(4)
+                logging.debug(f' - (pattern4) Found Chapter: [{self.chapter}]')
                 return
         
         # Pattern 5: "Title v## (YEAR) (Digital) (Uploader)"
@@ -215,6 +251,7 @@ class CBZFile:
             self.volume = match.group(2)
             self.year = int(match.group(3))
             self.uploader = match.group(4)
+            logging.debug(f' - (pattern5) Found Volume: [{self.volume}]')
             return
         
         # Pattern 6: "Title - One-shot (YEAR) (Digital) (Uploader)"
@@ -225,6 +262,7 @@ class CBZFile:
             self.title = match.group(1).strip()
             self.year = int(match.group(2))
             self.uploader = match.group(3)
+            logging.debug(f' - (pattern6) Found One-Shot: [{self.year}]')
             return
         
         # Pattern 7: "Title (YEAR) (Digital) (Uploader)" (no chapter/volume)
@@ -235,6 +273,7 @@ class CBZFile:
             self.title = match.group(1).strip()
             self.year = int(match.group(2))
             self.uploader = match.group(3)
+            logging.debug(f' - (pattern7) Found Year: [{self.year}]')
             return
         
         # Pattern 8: Simple "v##" format
@@ -243,6 +282,7 @@ class CBZFile:
         match = re.match(pattern8, filename)
         if match:
             self.volume = match.group(1)
+            logging.debug(f' - (pattern8) Found Volume: [{self.volume}]')
             # Try to get title from parent folder
             if parent_folder:
                 # Clean up parent folder name (remove year ranges, tags, etc.)
@@ -251,12 +291,29 @@ class CBZFile:
                 self.title = cleaned_title.strip()
             return
         
-        # Pattern 9: Bare chapter format like "c152b"
+        # Pattern 9: Bare chapter format like "c152b", "#152b"
         # Example: c152b
-        pattern9 = r'^c(\d+)([a-z]?)$'
+        pattern9 = r'^.*[c#](\d+)([a-z]?)$'
         match = re.match(pattern9, filename)
         if match:
             self.chapter = match.group(1) + (match.group(2) if match.group(2) else '')
+            logging.debug(f' - (pattern9) Found Chapter: [{self.chapter}]')
+            # Try to get title from parent folder
+            if parent_folder:
+                # Clean up parent folder name
+                cleaned_title = re.sub(r'\s+\(\d{4}[-\d]*\).*$', '', parent_folder)
+                cleaned_title = re.sub(r'\s+\([Dd]igital\).*$', '', cleaned_title)
+                cleaned_title = re.sub(r'\s+\([^)]+\)$', '', cleaned_title)
+                self.title = cleaned_title.strip()
+            return
+        
+        # Pattern 9b: Chapter ##" format (used by Mihon/Tachiyomi downloaders)
+        # Example: Chapter 27
+        pattern9b = r'^.*[Cc]hapter\s+(\d+)\b'
+        match = re.match(pattern9b, filename)
+        if match:
+            self.chapter = match.group(1)
+            logging.debug(f' - (pattern9b) Found Chapter: [{self.chapter}]')
             # Try to get title from parent folder
             if parent_folder:
                 # Clean up parent folder name
@@ -271,6 +328,7 @@ class CBZFile:
         year_match = re.search(r'\((\d{4})\)', filename)
         if year_match:
             self.year = int(year_match.group(1))
+            logging.debug(f' - (pattern10) Found Year: [{self.year}]')
         
         # Extract content in parentheses (potential uploader)
         parens = re.findall(r'\(([^)]+)\)', filename)
@@ -296,14 +354,16 @@ class CBZFile:
         chapter_match = re.search(r'\bc(\d+(?:\.\d+)?)\b', filename)
         if chapter_match:
             self.chapter = chapter_match.group(1)
+            logging.debug(f' - (pattern10) Found Chapter: [{self.chapter}]')
         
         # Try to extract volume
         volume_match = re.search(r'\bv(\d+)\b', filename, re.IGNORECASE)
         if volume_match and not self.volume:
             self.volume = volume_match.group(1)
+            logging.debug(f' - (pattern10) Found Volume: [{self.volume}]')
         
         # Extract title (everything before first year, chapter, volume, or tag)
-        if not self.title:
+        if not self.title or self.title == "Unknown":
             # Remove known patterns from end
             title_candidate = filename
             title_candidate = re.sub(r'\s+\(\d{4}\).*$', '', title_candidate)
